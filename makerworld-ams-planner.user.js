@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MakerWorld 多色分析（颜色清单 + 最少换料）
 // @namespace    https://local.mwca/
-// @version      1.5.0
+// @version      1.6.0
 // @description  在 MakerWorld 模型页右上角显示一个“多色分析”按钮，点击后才读取页面打印配置数据，统计所有打印盘的颜色、计算最少装料/换料次数，并给出推荐打印顺序与每盘耗时；点击颜色块可高亮用到该颜色的盘，面板内可折叠/展开并查看运行日志（含版本号）。
 // @author       local
 // @match        https://makerworld.com.cn/*
@@ -42,7 +42,7 @@
     }
   };
 
-  var VERSION = '1.5.0';
+  var VERSION = '1.6.0';
 
   function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 
@@ -706,6 +706,44 @@
     '.logbar{display:flex;align-items:center;gap:6px}',
     '.logbar .sp{flex:1}',
     '.logbar button{border:0;background:rgba(0,0,0,.06);color:inherit;border-radius:5px;padding:2px 6px;font-size:9.5px;cursor:pointer;line-height:1.4}',
+    '.panel.t-light{background:#fff;color:#1b1f24;border-color:rgba(0,0,0,.1);box-shadow:0 12px 34px rgba(0,0,0,.18)}',
+    '.panel.t-light .hd{background:linear-gradient(90deg,rgba(10,124,255,.14),rgba(0,196,140,.14))}',
+    '.panel.t-light .hd button{background:rgba(0,0,0,.06)}',
+    '.panel.t-light .hd button:hover{background:rgba(0,0,0,.12)}',
+    '.panel.t-light .sum div{background:rgba(0,0,0,.04)}',
+    '.panel.t-light .sum div.hl{background:rgba(10,124,255,.12)}',
+    '.panel.t-light .sum div.hl b{color:#0a6fd8}',
+    '.panel.t-light .chip{background:rgba(0,0,0,.05)}',
+    '.panel.t-light .chip.top{background:rgba(10,124,255,.14)}',
+    '.panel.t-light .chip.sel{background:rgba(10,124,255,.18);box-shadow:inset 0 0 0 1px rgba(10,124,255,.55)}',
+    '.panel.t-light .warn.bad{background:rgba(220,38,38,.1);color:#b91c1c}',
+    '.panel.t-light .warn.mid{background:rgba(217,119,6,.12);color:#b45309}',
+    '.panel.t-light .tbl th{border-bottom-color:rgba(0,0,0,.08)}',
+    '.panel.t-light .tbl td{border-bottom-color:rgba(0,0,0,.05)}',
+    '.panel.t-light .tbl tr.hit{background:rgba(10,124,255,.10)}',
+    '.panel.t-light .ft input,.panel.t-light .ft select{border-color:rgba(0,0,0,.15)}',
+    '.panel.t-light .hl-note{background:rgba(10,124,255,.08);color:#0a6fd8}',
+    '.panel.t-light .logbox{background:rgba(0,0,0,.045)}',
+    '.panel.t-light .logbar button{background:rgba(0,0,0,.06)}',
+    '.panel.t-dark{background:#1b1e23;color:#e6e8eb;border-color:rgba(255,255,255,.1);box-shadow:0 12px 34px rgba(0,0,0,.5)}',
+    '.panel.t-dark .hd{background:linear-gradient(90deg,rgba(10,124,255,.22),rgba(0,196,140,.22))}',
+    '.panel.t-dark .hd button{background:rgba(255,255,255,.1)}',
+    '.panel.t-dark .hd button:hover{background:rgba(255,255,255,.18)}',
+    '.panel.t-dark .sum div{background:rgba(255,255,255,.07)}',
+    '.panel.t-dark .sum div.hl{background:rgba(10,124,255,.25)}',
+    '.panel.t-dark .sum div.hl b{color:#7fb8ff}',
+    '.panel.t-dark .chip{background:rgba(255,255,255,.09)}',
+    '.panel.t-dark .chip.top{background:rgba(10,124,255,.28)}',
+    '.panel.t-dark .chip.sel{background:rgba(10,124,255,.3);box-shadow:inset 0 0 0 1px rgba(120,180,255,.7)}',
+    '.panel.t-dark .warn.bad{background:rgba(248,113,113,.14);color:#fca5a5}',
+    '.panel.t-dark .warn.mid{background:rgba(251,191,36,.14);color:#fbbf24}',
+    '.panel.t-dark .tbl th{border-bottom-color:rgba(255,255,255,.12)}',
+    '.panel.t-dark .tbl td{border-bottom-color:rgba(255,255,255,.07)}',
+    '.panel.t-dark .tbl tr.hit{background:rgba(10,124,255,.22)}',
+    '.panel.t-dark .ft input,.panel.t-dark .ft select{border-color:rgba(255,255,255,.2)}',
+    '.panel.t-dark .hl-note{background:rgba(10,124,255,.22);color:#9cc7ff}',
+    '.panel.t-dark .logbox{background:rgba(255,255,255,.07)}',
+    '.panel.t-dark .logbar button{background:rgba(255,255,255,.12)}',
     '.logbox{font:9.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(0,0,0,.045);border-radius:7px;padding:6px;max-height:96px;overflow:auto;white-space:pre-wrap;word-break:break-all;opacity:.78}',
     '@media (prefers-color-scheme:dark){.logbox{background:rgba(255,255,255,.07)}.logbar button{background:rgba(255,255,255,.12)}}'
   ].join('');
@@ -721,6 +759,7 @@
     selectedColor: null,                // 高亮的颜色 key（mat|hex）
     pos: store.get('pos', null),        // 用户拖过的位置 {left, top}
     logs: [],                           // 运行日志
+    theme: store.get('theme', 'auto'),  // 皮肤：auto/page/invert/light/dark
     min: store.get('min', false),
     hidden: false,
     lastId: null
@@ -728,6 +767,37 @@
 
   var hostEl = null;
   var shadow = null;
+
+  // 判断当前页面是深色还是浅色底
+  function pageTone() {
+    try {
+      var bg = '';
+      var nodes = [document.body, document.documentElement];
+      for (var i = 0; i < nodes.length && !bg; i++) {
+        if (!nodes[i]) continue;
+        var c = getComputedStyle(nodes[i]).backgroundColor || '';
+        if (c && c !== 'transparent' && c !== 'rgba(0, 0, 0, 0)') bg = c;
+      }
+      var m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(bg || '');
+      if (!m) return 'light';
+      var lum = (0.2126 * (+m[1]) + 0.7152 * (+m[2]) + 0.0722 * (+m[3])) / 255;
+      return lum > 0.5 ? 'light' : 'dark';
+    } catch (e) { return 'light'; }
+  }
+
+  function resolveThemeClass() {
+    var t = state.theme || 'auto';
+    if (t === 'light') return 't-light';
+    if (t === 'dark') return 't-dark';
+    if (t === 'page') return pageTone() === 'dark' ? 't-dark' : 't-light';
+    if (t === 'invert') return pageTone() === 'dark' ? 't-light' : 't-dark';
+    return '';
+  }
+
+  function themeLabel() {
+    var map = { auto: '自动', page: '同页面', invert: '反页面', light: '白色', dark: '黑色' };
+    return map[state.theme] || state.theme;
+  }
 
   function ensureHost() {
     if (hostEl && document.documentElement.contains(hostEl)) return;
@@ -955,6 +1025,11 @@
         '<input type="checkbox" data-role="ignoreOver"' + (state.ignoreOver ? ' checked' : '') + '>忽略 ' + overPlates.length + ' 个超槽盘</label>'
       : '';
 
+    var themeMap = [['auto', '自动'], ['page', '同页面'], ['invert', '反页面'], ['light', '白色'], ['dark', '黑色']];
+    var themeOpts = themeMap.map(function (it) {
+      return '<option value="' + it[0] + '"' + (state.theme === it[0] ? ' selected' : '') + '>' + it[1] + '</option>';
+    }).join('');
+
     var instOpts = '<option value="auto"' + (state.scope === 'auto' ? ' selected' : '') + '>自动</option>' +
       '<option value="all"' + (state.scope === 'all' ? ' selected' : '') + '>全部配置</option>' +
       state.design.instances.map(function (inst) {
@@ -964,7 +1039,7 @@
 
     var html =
       '<style>' + CSS + '</style>' +
-      '<div class="panel' + (state.min ? ' min' : '') + '">' +
+      '<div class="panel' + (state.min ? ' min' : '') + (resolveThemeClass() ? ' ' + resolveThemeClass() : '') + '">' +
         '<div class="hd" data-role="hd">' +
           '<span class="dot"></span><b>多色分析</b><span class="ver">v' + VERSION + '</span><span class="sp"></span>' +
           '<button data-act="copy" title="复制颜色清单和排程到剪贴板">复制</button>' +
@@ -992,7 +1067,8 @@
           '<div class="sec">' + (res.plan ? '推荐打印顺序（含每盘耗时）' : '各盘颜色与耗时') + '</div>' +
           '<table class="tbl"><thead>' + tblHead + '</thead><tbody>' + rows + '</tbody></table>' +
           '<div class="ft">槽数 <input data-role="slots" type="number" min="1" max="16" value="' + state.slots + '">' +
-            ' 范围 <select data-role="scope">' + instOpts + '</select>' + ignoreCk + '</div>' +
+            ' 范围 <select data-role="scope">' + instOpts + '</select>' +
+            ' 皮肤 <select data-role="theme">' + themeOpts + '</select>' + ignoreCk + '</div>' +
           '<div class="note">换料次数下限 = 颜色数 − 槽数（每色只上机一次即可达到）。净重为模型耗材，不含多色擦料；' +
             '遇到“AMS 一体打印版 + 分件版”都放在一个配置里的情况，用“忽略超槽盘”分别看。</div>' +
           '<div class="sec logbar">运行日志 <span class="ver">v' + VERSION + '</span><span class="sp"></span>' +
@@ -1117,6 +1193,14 @@
       state.scope = scopeSel.value;
       store.set('scope', state.scope);
       log('切换范围：' + state.scope);
+      render();
+    });
+
+    var themeSel = shadow.querySelector('[data-role="theme"]');
+    if (themeSel) themeSel.addEventListener('change', function () {
+      state.theme = themeSel.value;
+      store.set('theme', state.theme);
+      log('切换皮肤：' + themeLabel() + (state.theme === 'auto' ? '' : '（' + resolveThemeClass() + '）'));
       render();
     });
 
@@ -1259,7 +1343,8 @@
     }
   }
 
-  log('脚本加载 v' + VERSION + ' · ' + location.hostname);
+  log('脚本加载 v' + VERSION + ' · ' + location.hostname + ' · 皮肤：' + themeLabel() +
+      (resolveThemeClass() ? '（' + resolveThemeClass() + '）' : '（跟随系统）'));
   tick();
   setInterval(function () {
     tick(false);
