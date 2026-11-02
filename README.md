@@ -40,6 +40,23 @@
 | 复制 | 导出 TSV：顺序 / 模型 / 耗时 / 克数 / 颜色 / 操作 |
 | − | 收起面板，不影响页面 |
 
+## 作为 DSH Skill 使用
+
+`skill/makerworld-ams-planner/` 是同一能力的 **DSH Skill 包**（`SKILL.md` + `scripts/mw_analyze.py` + 内置用户脚本）：
+
+1. 把 `skill/makerworld-ams-planner/` 整个目录复制到 DSH 的 skill 目录：
+   - 项目级：`<项目根>/.dsh/skills/makerworld-ams-planner/`
+   - 用户级：`$DSH_HOME/skills/makerworld-ams-planner/`
+2. 新会话里直接说「帮我分析这个 MakerWorld 模型链接」，Agent 会加载 skill 并跑脚本。
+3. 也可以手动运行：
+
+   ```bash
+   python3 skill/makerworld-ams-planner/scripts/mw_analyze.py "<模型URL>" --slots 4
+   # 可选：--ignore-over 排除超槽盘；--json 输出结构化数据
+   ```
+
+脚本依赖：Python 3 + Playwright（`pip install playwright && playwright install chromium`）+ 本机 Chrome；用有头模式过 Cloudflare。
+
 ## 算法
 
 1. **装料下限** = 颜色种类数（每种颜色至少上机一次）
