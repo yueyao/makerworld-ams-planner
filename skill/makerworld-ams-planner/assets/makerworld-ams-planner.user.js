@@ -1,13 +1,9 @@
 // ==UserScript==
 // @name         MakerWorld 多色分析（颜色清单 + 最少换料）
-// @namespace    https://github.com/yueyao/makerworld-ams-planner
-// @homepageURL  https://github.com/yueyao/makerworld-ams-planner
-// @supportURL   https://github.com/yueyao/makerworld-ams-planner/issues
-// @downloadURL  https://raw.githubusercontent.com/yueyao/makerworld-ams-planner/main/makerworld-ams-planner.user.js
-// @updateURL    https://raw.githubusercontent.com/yueyao/makerworld-ams-planner/main/makerworld-ams-planner.user.js
-// @version      1.2.0
-// @description  打开 MakerWorld 模型页时，自动读取页面自带的打印配置数据，统计所有打印盘的耗材颜色，计算最少装料/换料次数，并给出推荐打印顺序与每盘耗时。支持排除“超槽（AMS 版）”盘后按分件版重算。
-// @author       Bo He
+// @namespace    https://local.mwca/
+// @version      1.4.0
+// @description  在 MakerWorld 模型页右下角显示一个“多色分析”按钮，点击后才读取页面打印配置数据，统计所有打印盘的颜色、计算最少装料/换料次数，并给出推荐打印顺序与每盘耗时；点击颜色块可高亮用到该颜色的盘。
+// @author       local
 // @match        https://makerworld.com.cn/*
 // @match        https://*.makerworld.com.cn/*
 // @match        https://makerworld.com/*
@@ -666,7 +662,23 @@
     '.tbl th{border-bottom-color:rgba(255,255,255,.12)}',
     '.tbl td{border-bottom-color:rgba(255,255,255,.07)}',
     '.ft input,.ft select{border-color:rgba(255,255,255,.2)}',
-    '}'
+    '}',
+    '.fab{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border:0;border-radius:999px;background:linear-gradient(135deg,#0a7cff,#00c48c);color:#fff;font:600 12.5px/1 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;cursor:pointer;box-shadow:0 6px 18px rgba(10,124,255,.35);transition:transform .15s ease;-webkit-tap-highlight-color:transparent}',
+    '.fab:hover{transform:translateY(-1px)}',
+    '.fab:active{transform:translateY(0)}',
+    '.fab .ico{width:13px;height:13px;border-radius:50%;background:conic-gradient(#ff4d4d,#ffd400,#00c48c,#0a7cff,#b44dff,#ff4d4d);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.9)}',
+    '@keyframes mwcaPulse{0%{box-shadow:0 6px 18px rgba(10,124,255,.35),0 0 0 0 rgba(10,124,255,.55)}70%{box-shadow:0 6px 18px rgba(10,124,255,.35),0 0 0 13px rgba(10,124,255,0)}100%{box-shadow:0 6px 18px rgba(10,124,255,.35),0 0 0 0 rgba(10,124,255,0)}}',
+    '.fab.pulse{animation:mwcaPulse 1.9s ease-out infinite}',
+    '@media (prefers-reduced-motion:reduce){.fab.pulse{animation:none}}',
+    '.chips .chip{cursor:pointer;transition:box-shadow .12s ease,background .12s ease}',
+    '.chips .chip:hover{background:rgba(10,124,255,.12)}',
+    '.chip.sel{background:rgba(10,124,255,.18);box-shadow:inset 0 0 0 1px rgba(10,124,255,.55)}',
+    '.tbl tr.hit{background:rgba(10,124,255,.10)}',
+    '.tbl tr.hit td{font-weight:600}',
+    '.tbl tr.dim{opacity:.32}',
+    '.hl-note{font-size:10.5px;line-height:1.45;padding:4px 7px;border-radius:7px;background:rgba(10,124,255,.08);color:#0a6fd8;display:none}',
+    '.hl-note.on{display:block}',
+    '@media (prefers-color-scheme:dark){.chip.sel{background:rgba(10,124,255,.3);box-shadow:inset 0 0 0 1px rgba(120,180,255,.7)}.tbl tr.hit{background:rgba(10,124,255,.22)}.hl-note{background:rgba(10,124,255,.22);color:#9cc7ff}}'
   ].join('');
 
   var state = {
@@ -675,6 +687,9 @@
     scope: store.get('scope', 'auto'),
     slots: Math.max(1, Math.min(16, Math.floor(store.get('slots', 4)))),
     ignoreOver: !!store.get('ignoreOver', false),
+    used: !!store.get('used', false),   // 是否点开过（点过就不再闪）
+    opened: false,                      // 当前是否展开面板
+    selectedColor: null,                // 高亮的颜色 key（mat|hex）
     min: store.get('min', false),
     hidden: false,
     lastId: null
@@ -706,6 +721,36 @@
     ensureHost();
     if (!shadow) return;
     if (state.hidden || !state.design) { hidePanel(); return; }
+    if (!state.opened) { renderFab(); return; }
+    renderPanel();
+  }
+
+  // 右下角悬浮按钮：默认只显示它，不跑分析
+  function renderFab() {
+    shadow.innerHTML = '<style>' + CSS + '</style>' +
+      '<button class="fab' + (state.used ? '' : ' pulse') + '" data-role="fab" title="点击分析本页所有打印盘的颜色、最少换料次数和打印顺序">' +
+        '<span class="ico"></span>多色分析' +
+      '</button>';
+    showPanel();
+    var fab = shadow.querySelector('[data-role="fab"]');
+    if (fab) {
+      fab.addEventListener('click', function () {
+        state.opened = true;
+        state.used = true;
+        store.set('used', true);
+        render();
+      });
+    }
+    // 闪 12 秒还没点就停下，避免一直晃
+    if (!state.used) {
+      setTimeout(function () {
+        var f = shadow && shadow.querySelector('.fab.pulse');
+        if (f) f.classList.remove('pulse');
+      }, 12000);
+    }
+  }
+
+  function renderPanel() {
     var scopeRes = resolveScope(state.design, state.scope);
     if (!scopeRes || !scopeRes.plates.length) { hidePanel(); return; }
 
@@ -759,11 +804,12 @@
     var ejects = res.plan ? res.plan.ejects : '—';
     var starCount = res.colors.filter(function (c) { return c.plateCount >= Math.max(2, res.n * 0.5); }).length;
 
-    var chips = res.colors.map(function (c) {
+    var chips = res.colors.map(function (c, ci) {
       var top = c.plateCount >= Math.max(2, res.n * 0.5) ? ' top' : '';
-      var title = c.mat + ' · ' + c.plateCount + ' 盘 · ' + fmtG(c.grams) + ' · ' + c.hex;
-      return '<span class="chip' + top + '" title="' + esc(title) + '"><i style="background:' + c.hex + '"></i>' +
-             esc(c.disp) + '<em>' + c.plateCount + '</em></span>';
+      var sel = state.selectedColor === c.key ? ' sel' : '';
+      var title = c.mat + ' · ' + c.plateCount + ' 盘 · ' + fmtG(c.grams) + ' · ' + c.hex + '（点击高亮用到它的盘）';
+      return '<span class="chip' + top + sel + '" data-ci="' + ci + '" data-key="' + esc(c.key) + '" title="' + esc(title) + '">' +
+             '<i style="background:' + c.hex + '"></i>' + esc(c.disp) + '<em>' + c.plateCount + '</em></span>';
     }).join('');
 
     var rows = '';
@@ -776,7 +822,7 @@
         }).join('');
         var ops = opsText(s, res) || '—';
         cum += s.plate.secs || 0;
-        rows += '<tr><td class="no">' + (i + 1) + '</td>' +
+        rows += '<tr data-cols="' + s.plate.cols.join(',') + '"><td class="no">' + (i + 1) + '</td>' +
                 '<td class="nm" title="' + esc(s.plate.name + ' · ' + fmtG(s.plate.grams) + ' · ' + fmtT(s.plate.secs)) + '">' + esc(s.plate.name) + '</td>' +
                 '<td class="tm" title="累计 ' + esc(fmtT(cum)) + '">' + fmtT(s.plate.secs) + '</td>' +
                 '<td class="dots">' + dots + '</td>' +
@@ -789,7 +835,7 @@
           return '<i style="background:' + c.hex + '" title="' + esc(c.disp) + '"></i>';
         }).join('');
         var cc = plateColorCount(p);
-        rows += '<tr><td class="no">·</td>' +
+        rows += '<tr data-cols="' + p.cols.join(',') + '"><td class="no">·</td>' +
                 '<td class="nm" title="' + esc(p.name + ' · ' + fmtG(p.grams) + ' · ' + fmtT(p.secs)) + '">' + esc(p.name) + '</td>' +
                 '<td class="tm">' + fmtT(p.secs) + '</td>' +
                 '<td class="dots">' + dots + '</td>' +
@@ -825,7 +871,7 @@
           '<span class="dot"></span><b>多色分析</b><span class="sp"></span>' +
           '<button data-act="copy" title="复制颜色清单和排程到剪贴板">复制</button>' +
           '<button data-act="refresh" title="重新读取页面数据">↻</button>' +
-          '<button data-act="min" title="收起/展开">' + (state.min ? '+' : '−') + '</button>' +
+          '<button data-act="close" title="关闭，收回成悬浮按钮">×</button>' +
         '</div>' +
         '<div class="bd">' +
           '<div class="ttl">' + esc(state.design.title || 'MakerWorld 模型') + '</div>' +
@@ -841,8 +887,9 @@
             (longest ? '<span>最长 ' + esc(longest.name) + ' ' + fmtT(longest.secs) + '</span>' : '') +
             (optimal ? '<span>已按最优排程</span>' : '') + '</div>' +
           warn +
-          '<div class="sec">颜色清单（按出现盘数）</div>' +
+          '<div class="sec">颜色清单（按出现盘数 · 点色块高亮对应盘）</div>' +
           '<div class="chips">' + chips + '</div>' +
+          '<div class="hl-note" data-role="hlNote"></div>' +
           '<div class="sec">' + (res.plan ? '推荐打印顺序（含每盘耗时）' : '各盘颜色与耗时') + '</div>' +
           '<table class="tbl"><thead>' + tblHead + '</thead><tbody>' + rows + '</tbody></table>' +
           '<div class="ft">槽数 <input data-role="slots" type="number" min="1" max="16" value="' + state.slots + '">' +
@@ -855,15 +902,66 @@
     shadow.innerHTML = html;
     showPanel();
     bindEvents();
+    syncHighlight();
+  }
+
+  // 按当前选中的颜色，给表格行加高亮/变暗
+  function syncHighlight() {
+    if (!shadow) return;
+    var sel = state.selectedColor;
+    var res = state.res;
+    var note = shadow.querySelector('[data-role="hlNote"]');
+
+    var color = null;
+    if (sel && res) {
+      for (var k = 0; k < res.colors.length; k++) {
+        if (res.colors[k].key === sel) { color = res.colors[k]; break; }
+      }
+      if (!color) { state.selectedColor = sel = null; }
+    }
+
+    Array.prototype.forEach.call(shadow.querySelectorAll('.chip[data-ci]'), function (chip) {
+      var isSel = sel !== null && chip.getAttribute('data-key') === sel;
+      chip.classList.toggle('sel', isSel);
+    });
+
+    Array.prototype.forEach.call(shadow.querySelectorAll('.tbl tbody tr'), function (tr) {
+      var cols = (tr.getAttribute('data-cols') || '').split(',');
+      var hit = sel !== null && color !== null && cols.indexOf(String(color.idx)) >= 0;
+      tr.classList.toggle('hit', hit);
+      tr.classList.toggle('dim', sel !== null && !hit);
+    });
+
+    if (note) {
+      if (color) {
+        var names = (color.plateNames || []);
+        var listed = names.slice(0, 8).join('、');
+        if (names.length > 8) listed += ' 等';
+        note.textContent = '高亮：' + color.disp + ' · 共 ' + color.plateCount + ' 盘（' + listed + '）。再点一次取消。';
+        note.classList.add('on');
+      } else {
+        note.textContent = '点上面的颜色块，可以高亮用到这个颜色的盘。';
+        note.classList.remove('on');
+      }
+    }
   }
 
   function bindEvents() {
     var hd = shadow.querySelector('[data-role="hd"]');
     var copyBtn = shadow.querySelector('[data-act="copy"]');
     var refBtn = shadow.querySelector('[data-act="refresh"]');
-    var minBtn = shadow.querySelector('[data-act="min"]');
+    var closeBtn = shadow.querySelector('[data-act="close"]');
     var slotsInput = shadow.querySelector('[data-role="slots"]');
     var scopeSel = shadow.querySelector('[data-role="scope"]');
+
+    // 点颜色块：高亮用到该颜色的盘；再点一次取消
+    Array.prototype.forEach.call(shadow.querySelectorAll('.chip[data-ci]'), function (chip) {
+      chip.addEventListener('click', function () {
+        var key = chip.getAttribute('data-key');
+        state.selectedColor = state.selectedColor === key ? null : key;
+        syncHighlight();
+      });
+    });
 
     if (copyBtn) copyBtn.addEventListener('click', function () {
       var txt = buildCopyText();
@@ -880,9 +978,8 @@
       tick(true);
     });
 
-    if (minBtn) minBtn.addEventListener('click', function () {
-      state.min = !state.min;
-      store.set('min', state.min);
+    if (closeBtn) closeBtn.addEventListener('click', function () {
+      state.opened = false;
       render();
     });
 
@@ -1013,6 +1110,8 @@
         if (!norm.instances.length) { hidePanel(); return; }
         state.design = norm;
         state.lastId = id;
+        state.opened = false;   // 进入新页面先只给按钮，不自动分析
+        state.selectedColor = null;
         render();
       };
 
@@ -1041,6 +1140,17 @@
     analyze: analyze,
     normalizeDesign: normalizeDesign,
     resolveScope: resolveScope,
-    state: state
+    state: state,
+    // 供脚本/自动化调用：等价于点右下角按钮
+    open: function () {
+      state.opened = true;
+      state.used = true;
+      store.set('used', true);
+      render();
+    },
+    close: function () {
+      state.opened = false;
+      render();
+    }
   };
 })();

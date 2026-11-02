@@ -31,7 +31,7 @@ whenToUse: 用户给出 MakerWorld 模型链接并问“几个颜色/要换几�
 ## 脚本怎么工作
 
 - 用 Playwright + 本机 Chrome 打开页面（MakerWorld 有 Cloudflare，直接抓 HTML 会 403）；
-- 把本 skill 附带的 `assets/makerworld-ams-planner.user.js` 注入页面，读取 `window.__MWCA__.state.res`；
+- 把本 skill 附带的 `assets/makerworld-ams-planner.user.js` 注入页面；用户脚本 v1.3 起默认只显示悬浮按钮、不自动分析，所以脚本会调用 `window.__MWCA__.open()` 展开面板，再读取 `window.__MWCA__.state.res`；
 - Python 只负责格式化成 Markdown，换料算法与用户脚本完全一致（子集 DP 求最小同时在机颜色数 + 局部搜索排序 + 贪心换料模拟）。
 
 ## 关键口径（汇报时带上）

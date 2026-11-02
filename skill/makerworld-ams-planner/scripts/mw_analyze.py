@@ -116,6 +116,11 @@ def collect_state(url, slots=4, scope="auto", ignore_over=False, timeout=120, he
                 {"slots": slots, "ignoreOver": bool(ignore_over)},
             )
             page.evaluate(script)
+            # v1.3.0 起默认只显示按钮、不自动分析：主动展开面板
+            page.wait_for_timeout(400)
+            page.evaluate(
+                "() => { try { if (window.__MWCA__ && window.__MWCA__.open) window.__MWCA__.open(); } catch (e) {} }"
+            )
             # 4) 等分析结果
             state = None
             while time.time() < deadline:
