@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MakerWorld 多色分析（颜色清单 + 最少换料）
 // @namespace    https://local.mwca/
-// @version      1.4.1
-// @description  在 MakerWorld 模型页右下角显示一个“多色分析”按钮，点击后才读取页面打印配置数据，统计所有打印盘的颜色、计算最少装料/换料次数，并给出推荐打印顺序与每盘耗时；点击颜色块可高亮用到该颜色的盘。
+// @version      1.5.0
+// @description  在 MakerWorld 模型页右上角显示一个“多色分析”按钮，点击后才读取页面打印配置数据，统计所有打印盘的颜色、计算最少装料/换料次数，并给出推荐打印顺序与每盘耗时；点击颜色块可高亮用到该颜色的盘，面板内可折叠/展开并查看运行日志（含版本号）。
 // @author       local
 // @match        https://makerworld.com.cn/*
 // @match        https://*.makerworld.com.cn/*
@@ -41,6 +41,29 @@
       try { localStorage.setItem(LS_PREFIX + k, JSON.stringify(v)); } catch (e) {}
     }
   };
+
+  var VERSION = '1.5.0';
+
+  function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+
+  // 运行日志：面板里能看到，Console 里也有，方便排查“打不开”这类问题
+  function log(msg) {
+    var d = new Date();
+    var line = '[' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) + '] ' + msg;
+    if (!state.logs) state.logs = [];
+    state.logs.push(line);
+    if (state.logs.length > 100) state.logs.shift();
+    try { console.log('[MWCA v' + VERSION + '] ' + msg); } catch (e) {}
+    try {
+      var el = shadow && shadow.querySelector('[data-role="logBox"]');
+      if (el) { el.textContent = buildLogText(); el.scrollTop = el.scrollHeight; }
+    } catch (e) {}
+  }
+
+  function buildLogText() {
+    var head = 'MWCA v' + VERSION + ' · ' + location.hostname + location.pathname;
+    return head + '\n' + (state.logs || []).join('\n');
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -678,7 +701,13 @@
     '.tbl tr.dim{opacity:.32}',
     '.hl-note{font-size:10.5px;line-height:1.45;padding:4px 7px;border-radius:7px;background:rgba(10,124,255,.08);color:#0a6fd8;display:none}',
     '.hl-note.on{display:block}',
-    '@media (prefers-color-scheme:dark){.chip.sel{background:rgba(10,124,255,.3);box-shadow:inset 0 0 0 1px rgba(120,180,255,.7)}.tbl tr.hit{background:rgba(10,124,255,.22)}.hl-note{background:rgba(10,124,255,.22);color:#9cc7ff}}'
+    '@media (prefers-color-scheme:dark){.chip.sel{background:rgba(10,124,255,.3);box-shadow:inset 0 0 0 1px rgba(120,180,255,.7)}.tbl tr.hit{background:rgba(10,124,255,.22)}.hl-note{background:rgba(10,124,255,.22);color:#9cc7ff}}',
+    '.ver{font-size:9px;font-weight:400;opacity:.45;margin-left:1px}',
+    '.logbar{display:flex;align-items:center;gap:6px}',
+    '.logbar .sp{flex:1}',
+    '.logbar button{border:0;background:rgba(0,0,0,.06);color:inherit;border-radius:5px;padding:2px 6px;font-size:9.5px;cursor:pointer;line-height:1.4}',
+    '.logbox{font:9.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(0,0,0,.045);border-radius:7px;padding:6px;max-height:96px;overflow:auto;white-space:pre-wrap;word-break:break-all;opacity:.78}',
+    '@media (prefers-color-scheme:dark){.logbox{background:rgba(255,255,255,.07)}.logbar button{background:rgba(255,255,255,.12)}}'
   ].join('');
 
   var state = {
@@ -691,6 +720,7 @@
     opened: false,                      // 当前是否展开面板
     selectedColor: null,                // 高亮的颜色 key（mat|hex）
     pos: store.get('pos', null),        // 用户拖过的位置 {left, top}
+    logs: [],                           // 运行日志
     min: store.get('min', false),
     hidden: false,
     lastId: null
@@ -717,6 +747,7 @@
   }
 
   function hidePanel() {
+    if (hostEl && hostEl.style.display !== 'none') log('隐藏入口');
     if (hostEl) hostEl.style.display = 'none';
   }
 
@@ -733,6 +764,7 @@
       renderPanel();
     } catch (e) {
       // 万一面板渲染出错，退回悬浮按钮，绝不让入口消失
+      log('面板渲染异常：' + (e && e.message ? e.message : e));
       state.opened = false;
       renderFab();
     }
@@ -741,7 +773,7 @@
   // 右下角悬浮按钮：默认只显示它，不跑分析
   function renderFab() {
     shadow.innerHTML = '<style>' + CSS + '</style>' +
-      '<button class="fab' + (state.used ? '' : ' pulse') + '" data-role="fab" title="点击分析本页所有打印盘的颜色、最少换料次数和打印顺序">' +
+      '<button class="fab' + (state.used ? '' : ' pulse') + '" data-role="fab" title="v' + VERSION + ' · 点击分析、可拖动；Ctrl/Cmd+Alt+M 也可切换">' +
         '<span class="ico"></span>多色分析' +
       '</button>';
     showPanel();
@@ -762,6 +794,13 @@
       fab.addEventListener('pointerdown', function (e) {
         var r = hostEl.getBoundingClientRect();
         drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false, id: e.pointerId };
+        try {
+          var hit = document.elementFromPoint(e.clientX, e.clientY);
+          var desc = hit ? (hit.tagName ? hit.tagName.toLowerCase() : '?') +
+            (hit.id ? ('#' + hit.id) : '') +
+            (typeof hit.className === 'string' && hit.className ? ('.' + hit.className.split(' ')[0]) : '') : 'null';
+          log('按下按钮 @' + Math.round(e.clientX) + ',' + Math.round(e.clientY) + '，命中 ' + desc);
+        } catch (err) { log('按钮按下（命中检测失败：' + (err && err.message) + '）'); }
         try { fab.setPointerCapture(e.pointerId); } catch (err) {}
       });
       fab.addEventListener('pointermove', function (e) {
@@ -781,7 +820,12 @@
         var moved = drag.moved;
         drag = null;
         try { fab.releasePointerCapture(e.pointerId); } catch (err) {}
-        if (moved) { savePos(); return; }
+        if (moved) {
+          log('拖动按钮到 ' + JSON.stringify(state.pos));
+          savePos();
+          return;
+        }
+        log('点击按钮 → 打开面板');
         openIt();
       });
       fab.addEventListener('pointercancel', function () { drag = null; });
@@ -813,11 +857,14 @@
     var res;
     try { res = analyze(plates, state.slots); }
     catch (e) {
+      log('分析异常：' + (e && e.message ? e.message : e));
       state.opened = false;
       renderFab();
       return;
     }
     state.res = res;
+    log('分析完成：' + res.n + ' 盘 / ' + res.C + ' 色' +
+        (res.plan ? ' / 装料 ' + res.plan.mounts + ' 次 / 换料 ' + res.plan.ejects + ' 次' : ' / 有超槽盘'));
 
     var scopeLabel;
     var instCount = scopeRes.instances.length;
@@ -919,9 +966,10 @@
       '<style>' + CSS + '</style>' +
       '<div class="panel' + (state.min ? ' min' : '') + '">' +
         '<div class="hd" data-role="hd">' +
-          '<span class="dot"></span><b>多色分析</b><span class="sp"></span>' +
+          '<span class="dot"></span><b>多色分析</b><span class="ver">v' + VERSION + '</span><span class="sp"></span>' +
           '<button data-act="copy" title="复制颜色清单和排程到剪贴板">复制</button>' +
           '<button data-act="refresh" title="重新读取页面数据">↻</button>' +
+          '<button data-act="fold" title="折叠/展开面板">' + (state.min ? '+' : '−') + '</button>' +
           '<button data-act="close" title="关闭，收回成悬浮按钮">×</button>' +
         '</div>' +
         '<div class="bd">' +
@@ -947,6 +995,9 @@
             ' 范围 <select data-role="scope">' + instOpts + '</select>' + ignoreCk + '</div>' +
           '<div class="note">换料次数下限 = 颜色数 − 槽数（每色只上机一次即可达到）。净重为模型耗材，不含多色擦料；' +
             '遇到“AMS 一体打印版 + 分件版”都放在一个配置里的情况，用“忽略超槽盘”分别看。</div>' +
+          '<div class="sec logbar">运行日志 <span class="ver">v' + VERSION + '</span><span class="sp"></span>' +
+            '<button data-act="copylog" title="复制日志，方便反馈问题">复制日志</button></div>' +
+          '<div class="logbox" data-role="logBox">' + esc(buildLogText()) + '</div>' +
         '</div>' +
       '</div>';
 
@@ -1002,6 +1053,8 @@
     var copyBtn = shadow.querySelector('[data-act="copy"]');
     var refBtn = shadow.querySelector('[data-act="refresh"]');
     var closeBtn = shadow.querySelector('[data-act="close"]');
+    var foldBtn = shadow.querySelector('[data-act="fold"]');
+    var copyLogBtn = shadow.querySelector('[data-act="copylog"]');
     var slotsInput = shadow.querySelector('[data-role="slots"]');
     var scopeSel = shadow.querySelector('[data-role="scope"]');
 
@@ -1024,14 +1077,31 @@
     });
 
     if (refBtn) refBtn.addEventListener('click', function () {
+      log('手动刷新页面数据');
       state.lastId = null;
       designCache.clear();
       tick(true);
     });
 
     if (closeBtn) closeBtn.addEventListener('click', function () {
+      log('关闭面板（收回成悬浮按钮）');
       state.opened = false;
       render();
+    });
+
+    if (foldBtn) foldBtn.addEventListener('click', function () {
+      state.min = !state.min;
+      store.set('min', state.min);
+      log(state.min ? '折叠面板' : '展开面板');
+      render();
+    });
+
+    if (copyLogBtn) copyLogBtn.addEventListener('click', function () {
+      var txt = buildLogText();
+      var done = function () { copyLogBtn.textContent = '已复制'; setTimeout(function () { copyLogBtn.textContent = '复制日志'; }, 1200); };
+      try {
+        navigator.clipboard.writeText(txt).then(done, function () { fallbackCopy(txt); done(); });
+      } catch (e) { fallbackCopy(txt); done(); }
     });
 
     if (slotsInput) slotsInput.addEventListener('change', function () {
@@ -1046,6 +1116,7 @@
     if (scopeSel) scopeSel.addEventListener('change', function () {
       state.scope = scopeSel.value;
       store.set('scope', state.scope);
+      log('切换范围：' + state.scope);
       render();
     });
 
@@ -1169,6 +1240,7 @@
         if (!norm.instances.length) { hidePanel(); return; }
         state.design = norm;
         state.lastId = id;
+        log('页面数据就绪：' + norm.title + '（' + norm.instances.length + ' 个配置）');
         state.opened = false;   // 进入新页面先只给按钮，不自动分析
         state.selectedColor = null;
         render();
@@ -1187,11 +1259,15 @@
     }
   }
 
+  log('脚本加载 v' + VERSION + ' · ' + location.hostname);
   tick();
   setInterval(function () {
     tick(false);
     // 兜底：有页面数据但入口被意外隐藏时，自动恢复
-    if (state.design && !state.hidden && hostEl && hostEl.style.display === 'none') render();
+    if (state.design && !state.hidden && hostEl && hostEl.style.display === 'none') {
+      log('watchdog：入口被隐藏，自动恢复');
+      render();
+    }
   }, 800);
   window.addEventListener('popstate', function () { tick(true); });
   window.addEventListener('hashchange', function () {
@@ -1200,20 +1276,38 @@
 
   // 调试用
   window.__MWCA__ = {
+    version: VERSION,
     analyze: analyze,
     normalizeDesign: normalizeDesign,
     resolveScope: resolveScope,
     state: state,
-    // 供脚本/自动化调用：等价于点右下角按钮
+    log: function () { return (state.logs || []).join('\n'); },
+    logText: buildLogText,
+    // 供脚本/自动化调用：等价于点悬浮按钮
     open: function () {
+      log('API 打开面板');
       state.opened = true;
       state.used = true;
       store.set('used', true);
       render();
     },
     close: function () {
+      log('API 关闭面板');
       state.opened = false;
       render();
     }
   };
+
+  // 快捷键兜底：万一按钮被页面元素挡住，也能用 Ctrl/Cmd+Alt+M 打开
+  document.addEventListener('keydown', function (e) {
+    if (!(e.ctrlKey || e.metaKey) || !e.altKey) return;
+    if (String(e.key || '').toLowerCase() !== 'm') return;
+    e.preventDefault();
+    if (!state.design) return;
+    if (state.opened) { state.opened = false; log('快捷键关闭面板'); }
+    else { state.opened = true; state.used = true; store.set('used', true); log('快捷键打开面板'); }
+    render();
+  });
+
+
 })();
