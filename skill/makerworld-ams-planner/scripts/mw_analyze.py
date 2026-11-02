@@ -8,6 +8,7 @@
   python3 mw_analyze.py "https://makerworld.com.cn/zh/models/<id>-..." --slots 4
   python3 mw_analyze.py "<url>" --slots 8 --scope all
   python3 mw_analyze.py "<url>" --ignore-over      # 排除颜色数 > 槽数的盘（分件版）
+  python3 mw_analyze.py "<url>" --ignore-first     # 忽略第一盘（第一盘=全套件/AMS 一体版时用）
   python3 mw_analyze.py "<url>" --json             # 输出结构化 JSON
 """
 
@@ -59,7 +60,7 @@ def read_userscript():
         return f.read()
 
 
-def collect_state(url, slots=4, scope="auto", ignore_over=False, timeout=120, headed=True):
+def collect_state(url, slots=4, scope="auto", ignore_over=False, ignore_first=False, timeout=120, headed=True):
     """打开页面 -> 注入用户脚本 -> 读取分析状态。"""
     from playwright.sync_api import sync_playwright
 
@@ -107,13 +108,14 @@ def collect_state(url, slots=4, scope="auto", ignore_over=False, timeout=120, he
 
             # 3) 写入设置并注入用户脚本
             page.evaluate(
-                """({slots, ignoreOver}) => {
+                """({slots, ignoreOver, ignoreFirst}) => {
                     try {
                         localStorage.setItem('mwca:slots', String(slots));
                         localStorage.setItem('mwca:ignoreOver', ignoreOver ? 'true' : 'false');
+                        localStorage.setItem('mwca:ignoreFirst', ignoreFirst ? 'true' : 'false');
                     } catch (e) {}
                 }""",
-                {"slots": slots, "ignoreOver": bool(ignore_over)},
+                {"slots": slots, "ignoreOver": bool(ignore_over), "ignoreFirst": bool(ignore_first)},
             )
             page.evaluate(script)
             # v1.3.0 起默认只显示按钮、不自动分析：主动展开面板
@@ -234,6 +236,7 @@ def main():
     ap.add_argument("--slots", type=int, default=4, help="AMS 料位数，默认 4")
     ap.add_argument("--scope", default="auto", help="auto / all / inst:<id>")
     ap.add_argument("--ignore-over", action="store_true", help="排除颜色数超过槽数的盘")
+    ap.add_argument("--ignore-first", action="store_true", help="忽略第一盘（第一盘是全套件/AMS 一体版时用）")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     ap.add_argument("--headless", action="store_true", help="无头模式（默认有头，Cloudflare 更容易过）")
     ap.add_argument("--timeout", type=int, default=120, help="秒")
@@ -248,6 +251,7 @@ def main():
             slots=max(1, min(16, args.slots)),
             scope=args.scope,
             ignore_over=args.ignore_over,
+            ignore_first=args.ignore_first,
             timeout=args.timeout,
             headed=not args.headless,
         )

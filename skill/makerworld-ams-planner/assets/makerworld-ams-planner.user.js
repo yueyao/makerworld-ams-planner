@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MakerWorld 多色分析（颜色清单 + 最少换料）
 // @namespace    https://local.mwca/
-// @version      1.6.0
+// @version      1.7.0
 // @description  在 MakerWorld 模型页右上角显示一个“多色分析”按钮，点击后才读取页面打印配置数据，统计所有打印盘的颜色、计算最少装料/换料次数，并给出推荐打印顺序与每盘耗时；点击颜色块可高亮用到该颜色的盘，面板内可折叠/展开并查看运行日志（含版本号）。
 // @author       local
 // @match        https://makerworld.com.cn/*
@@ -42,7 +42,7 @@
     }
   };
 
-  var VERSION = '1.6.0';
+  var VERSION = '1.7.0';
 
   function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 
@@ -233,6 +233,7 @@
             ? (looksLikeSettingsTitle(inst.title) ? ('盘 ' + p.index) : (inst.title + ' #' + p.index))
             : inst.title,
           instId: inst.id,
+          index: p.index,
           mats: p.mats,
           grams: p.grams,
           secs: p.secs
@@ -760,6 +761,7 @@
     pos: store.get('pos', null),        // 用户拖过的位置 {left, top}
     logs: [],                           // 运行日志
     theme: store.get('theme', 'auto'),  // 皮肤：auto/page/invert/light/dark
+    ignoreFirst: !!store.get('ignoreFirst', false),  // 忽略第一盘（常见于第一盘=全套件、后面是分色件）
     min: store.get('min', false),
     hidden: false,
     lastId: null
@@ -916,6 +918,20 @@
     if (!scopeRes || !scopeRes.plates.length) { hidePanel(); return; }
 
     var allPlates = scopeRes.plates;
+
+    // “忽略第一盘”：只在当前范围里存在多盘配置时生效；
+    // 多盘配置里 index===1 的那盘不参与统计（常见于第一盘是“全套件/AMS 一体版”）。
+    var instPlateCount = {};
+    scopeRes.instances.forEach(function (inst) { instPlateCount[inst.id] = inst.plates.length; });
+    var hasMultiPlate = scopeRes.instances.some(function (inst) { return inst.plates.length > 1; });
+    var droppedFirst = [];
+    if (state.ignoreFirst && hasMultiPlate) {
+      allPlates = allPlates.filter(function (p) {
+        if ((instPlateCount[p.instId] || 0) > 1 && p.index === 1) { droppedFirst.push(p); return false; }
+        return true;
+      });
+    }
+
     var overPlates = allPlates.filter(function (p) { return plateColorCount(p) > state.slots; });
     var plates = allPlates;
     var excluded = 0;
@@ -966,6 +982,13 @@
     } else if (!optimal) {
       warn = '<div class="warn mid">⚠ 按最优顺序也需要 ' + res.span + ' 个料位同时在机；' + state.slots + ' 槽下会重复上料 ' +
              (res.plan ? res.plan.reloads : '?') + ' 次。想让“每色只上一次”，至少设 ' + res.span + ' 槽。</div>';
+    }
+
+    if (droppedFirst.length) {
+      var dfNames = droppedFirst.slice(0, 3).map(function (p) {
+        return '「' + p.name + '」' + plateColorCount(p) + ' 色 · ' + fmtG(p.grams);
+      }).join('、');
+      warn = '<div class="warn mid">已忽略第一盘（' + dfNames + '），按剩余 ' + res.n + ' 盘统计。</div>' + warn;
     }
 
     var mounts = res.plan ? res.plan.mounts : '—';
@@ -1020,6 +1043,11 @@
       if (!longest || (p.secs || 0) > (longest.secs || 0)) longest = p;
     });
 
+    var firstCk = hasMultiPlate
+      ? '<label class="ck" title="跳过第一盘（常见于第一盘=全套件，后面才是分色/分件单色盘）">' +
+        '<input type="checkbox" data-role="ignoreFirst"' + (state.ignoreFirst ? ' checked' : '') + '>忽略第一盘</label>'
+      : '';
+
     var ignoreCk = overPlates.length
       ? '<label class="ck" title="把超过槽数的盘排除，按剩下的盘计算（适合分件/单色打印思路）">' +
         '<input type="checkbox" data-role="ignoreOver"' + (state.ignoreOver ? ' checked' : '') + '>忽略 ' + overPlates.length + ' 个超槽盘</label>'
@@ -1068,7 +1096,7 @@
           '<table class="tbl"><thead>' + tblHead + '</thead><tbody>' + rows + '</tbody></table>' +
           '<div class="ft">槽数 <input data-role="slots" type="number" min="1" max="16" value="' + state.slots + '">' +
             ' 范围 <select data-role="scope">' + instOpts + '</select>' +
-            ' 皮肤 <select data-role="theme">' + themeOpts + '</select>' + ignoreCk + '</div>' +
+            ' 皮肤 <select data-role="theme">' + themeOpts + '</select>' + firstCk + ignoreCk + '</div>' +
           '<div class="note">换料次数下限 = 颜色数 − 槽数（每色只上机一次即可达到）。净重为模型耗材，不含多色擦料；' +
             '遇到“AMS 一体打印版 + 分件版”都放在一个配置里的情况，用“忽略超槽盘”分别看。</div>' +
           '<div class="sec logbar">运行日志 <span class="ver">v' + VERSION + '</span><span class="sp"></span>' +
@@ -1201,6 +1229,14 @@
       state.theme = themeSel.value;
       store.set('theme', state.theme);
       log('切换皮肤：' + themeLabel() + (state.theme === 'auto' ? '' : '（' + resolveThemeClass() + '）'));
+      render();
+    });
+
+    var firstCkDb = shadow.querySelector('[data-role="ignoreFirst"]');
+    if (firstCkDb) firstCkDb.addEventListener('change', function () {
+      state.ignoreFirst = !!firstCkDb.checked;
+      store.set('ignoreFirst', state.ignoreFirst);
+      log('忽略第一盘：' + (state.ignoreFirst ? '开' : '关'));
       render();
     });
 
