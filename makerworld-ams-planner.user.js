@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MakerWorld 多色分析（颜色清单 + 最少换料）
 // @namespace    https://local.mwca/
-// @version      1.4.0
+// @version      1.4.1
 // @description  在 MakerWorld 模型页右下角显示一个“多色分析”按钮，点击后才读取页面打印配置数据，统计所有打印盘的颜色、计算最少装料/换料次数，并给出推荐打印顺序与每盘耗时；点击颜色块可高亮用到该颜色的盘。
 // @author       local
 // @match        https://makerworld.com.cn/*
@@ -690,6 +690,7 @@
     used: !!store.get('used', false),   // 是否点开过（点过就不再闪）
     opened: false,                      // 当前是否展开面板
     selectedColor: null,                // 高亮的颜色 key（mat|hex）
+    pos: store.get('pos', null),        // 用户拖过的位置 {left, top}
     min: store.get('min', false),
     hidden: false,
     lastId: null
@@ -704,7 +705,13 @@
     if (hostEl) { shadow = hostEl.shadowRoot; return; }
     hostEl = document.createElement('div');
     hostEl.id = HOST_ID;
-    hostEl.style.cssText = 'position:fixed;z-index:2147483000;right:16px;bottom:16px;font-size:0;';
+    hostEl.style.cssText = 'position:fixed;z-index:2147483000;right:16px;top:88px;font-size:0;';
+    if (state.pos && typeof state.pos.left === 'number' && typeof state.pos.top === 'number') {
+      hostEl.style.left = state.pos.left + 'px';
+      hostEl.style.top = state.pos.top + 'px';
+      hostEl.style.right = 'auto';
+      hostEl.style.bottom = 'auto';
+    }
     try { shadow = hostEl.attachShadow({ mode: 'open' }); } catch (e) { shadow = null; }
     document.documentElement.appendChild(hostEl);
   }
@@ -722,7 +729,13 @@
     if (!shadow) return;
     if (state.hidden || !state.design) { hidePanel(); return; }
     if (!state.opened) { renderFab(); return; }
-    renderPanel();
+    try {
+      renderPanel();
+    } catch (e) {
+      // 万一面板渲染出错，退回悬浮按钮，绝不让入口消失
+      state.opened = false;
+      renderFab();
+    }
   }
 
   // 右下角悬浮按钮：默认只显示它，不跑分析
@@ -734,12 +747,46 @@
     showPanel();
     var fab = shadow.querySelector('[data-role="fab"]');
     if (fab) {
-      fab.addEventListener('click', function () {
+      var openIt = function () {
         state.opened = true;
         state.used = true;
         store.set('used', true);
         render();
+      };
+      var drag = null;
+      var savePos = function () {
+        var r = hostEl.getBoundingClientRect();
+        state.pos = { left: Math.round(r.left), top: Math.round(r.top) };
+        store.set('pos', state.pos);
+      };
+      fab.addEventListener('pointerdown', function (e) {
+        var r = hostEl.getBoundingClientRect();
+        drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false, id: e.pointerId };
+        try { fab.setPointerCapture(e.pointerId); } catch (err) {}
       });
+      fab.addEventListener('pointermove', function (e) {
+        if (!drag || drag.id !== e.pointerId) return;
+        var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+        if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 5) return;
+        drag.moved = true;
+        var nx = Math.max(0, Math.min(window.innerWidth - 80, drag.ox + dx));
+        var ny = Math.max(0, Math.min(window.innerHeight - 40, drag.oy + dy));
+        hostEl.style.right = 'auto';
+        hostEl.style.bottom = 'auto';
+        hostEl.style.left = nx + 'px';
+        hostEl.style.top = ny + 'px';
+      });
+      fab.addEventListener('pointerup', function (e) {
+        if (!drag) return;
+        var moved = drag.moved;
+        drag = null;
+        try { fab.releasePointerCapture(e.pointerId); } catch (err) {}
+        if (moved) { savePos(); return; }
+        openIt();
+      });
+      fab.addEventListener('pointercancel', function () { drag = null; });
+      // 键盘（Enter/Space）触发的 click 没有 pointer 事件
+      fab.addEventListener('click', function (e) { if (e.detail === 0) openIt(); });
     }
     // 闪 12 秒还没点就停下，避免一直晃
     if (!state.used) {
@@ -765,7 +812,11 @@
 
     var res;
     try { res = analyze(plates, state.slots); }
-    catch (e) { hidePanel(); return; }
+    catch (e) {
+      state.opened = false;
+      renderFab();
+      return;
+    }
     state.res = res;
 
     var scopeLabel;
@@ -1026,7 +1077,15 @@
         hostEl.style.left = nx + 'px';
         hostEl.style.top = ny + 'px';
       });
-      var endDrag = function () { dragging = false; };
+      var endDrag = function () {
+        if (!dragging) return;   // 只是点按钮（比如 ×），不要记位置
+        dragging = false;
+        if (hostEl) {
+          var r = hostEl.getBoundingClientRect();
+          state.pos = { left: Math.round(r.left), top: Math.round(r.top) };
+          store.set('pos', state.pos);
+        }
+      };
       hd.addEventListener('pointerup', endDrag);
       hd.addEventListener('pointercancel', endDrag);
     }
@@ -1129,7 +1188,11 @@
   }
 
   tick();
-  setInterval(function () { tick(false); }, 800);
+  setInterval(function () {
+    tick(false);
+    // 兜底：有页面数据但入口被意外隐藏时，自动恢复
+    if (state.design && !state.hidden && hostEl && hostEl.style.display === 'none') render();
+  }, 800);
   window.addEventListener('popstate', function () { tick(true); });
   window.addEventListener('hashchange', function () {
     if (state.scope === 'auto') tick(true);
